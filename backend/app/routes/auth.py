@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from fastapi.security import HTTPBearer
+from pydantic import BaseModel
 from bson import ObjectId
 from datetime import datetime
 from typing import Optional
@@ -24,6 +25,11 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 security = HTTPBearer()
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserCreate = Body(...)):
     """
@@ -31,7 +37,6 @@ async def register(user_data: UserCreate = Body(...)):
     """
     db = get_database()
 
-    # Check if email already exists
     existing_user = await db.users.find_one({"email": user_data.email})
     if existing_user:
         raise HTTPException(
@@ -39,7 +44,6 @@ async def register(user_data: UserCreate = Body(...)):
             detail="Email already registered",
         )
 
-    # Create user document
     user_dict = user_data.model_dump()
     user_dict["hashed_password"] = get_password_hash(user_dict.pop("password"))
     user_dict["created_at"] = datetime.utcnow()
@@ -47,14 +51,11 @@ async def register(user_data: UserCreate = Body(...)):
     user_dict["is_active"] = True
     user_dict["is_verified"] = False
 
-    # Insert user
     result = await db.users.insert_one(user_dict)
     user_id = str(result.inserted_id)
 
-    # Generate token
     token = create_user_token(user_id, user_data.email)
 
-    # Prepare response
     user_response = UserResponse(
         id=user_id,
         email=user_data.email,
@@ -73,48 +74,39 @@ async def register(user_data: UserCreate = Body(...)):
 
 
 @router.post("/login", response_model=Token)
-async def login(
-    email: str = Body(...),
-    password: str = Body(...),
-):
+async def login(credentials: LoginRequest):
     """
     Login user and return token
     """
     db = get_database()
 
-    # Find user by email
-    user = await db.users.find_one({"email": email})
+    user = await db.users.find_one({"email": credentials.email})
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
         )
 
-    # Verify password
-    if not verify_password(password, user["hashed_password"]):
+    if not verify_password(credentials.password, user["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
         )
 
-    # Check if user is active
     if not user.get("is_active", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is disabled",
         )
 
-    # Update last login
     await db.users.update_one(
         {"_id": user["_id"]},
         {"$set": {"last_login": datetime.utcnow()}},
     )
 
-    # Generate token
     user_id = str(user["_id"])
-    token = create_user_token(user_id, email)
+    token = create_user_token(user_id, credentials.email)
 
-    # Prepare response
     user_response = UserResponse(
         id=user_id,
         email=user["email"],
@@ -161,17 +153,14 @@ async def update_current_user(
     """
     db = get_database()
 
-    # Prepare update data
     update_data = {k: v for k, v in user_update.model_dump().items() if v is not None}
     update_data["updated_at"] = datetime.utcnow()
 
-    # Update user
     await db.users.update_one(
         {"_id": current_user["_id"]},
         {"$set": update_data},
     )
 
-    # Get updated user
     updated_user = await db.users.find_one({"_id": current_user["_id"]})
 
     return UserResponse(
@@ -198,14 +187,12 @@ async def change_password(
     """
     db = get_database()
 
-    # Verify current password
     if not verify_password(current_password, current_user["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect current password",
         )
 
-    # Update password
     hashed_password = get_password_hash(new_password)
     await db.users.update_one(
         {"_id": current_user["_id"]},
@@ -224,6 +211,5 @@ async def change_password(
 async def logout():
     """
     Logout user (client should delete token)
-    Note: For true logout, implement token blacklisting
     """
     return {"message": "Logout successful. Please delete the token on client side."}
