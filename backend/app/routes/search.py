@@ -41,7 +41,7 @@ async def search_by_image(
     image: UploadFile = File(...),
     category: Optional[ItemCategory] = None,
     limit: int = Query(10, ge=1, le=50),
-    item_type: str = Query("found", regex="^(lost|found|all)$"),
+    item_type: str = Query("all", regex="^(lost|found|all)$"),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -62,7 +62,7 @@ async def search_by_image(
         # Search both collections
         pass
     
-    query = {"status": ItemStatus.ACTIVE}
+    query = {"status": "active"}
     if category:
         query["category"] = category
     
@@ -109,13 +109,13 @@ async def search_by_image(
     }
 
 
-@router.post("/text")
+@router.get("/text")
 async def search_by_text(
     query_text: str = Query(..., min_length=3),
     category: Optional[ItemCategory] = None,
     color: Optional[str] = None,
     limit: int = Query(20, ge=1, le=100),
-    item_type: str = Query("found", regex="^(lost|found|all)$"),
+    item_type: str = Query("all", regex="^(lost|found|all)$"),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -131,7 +131,7 @@ async def search_by_text(
             {"color": {"$regex": query_text, "$options": "i"}},
             {"brand": {"$regex": query_text, "$options": "i"}},
         ],
-        "status": ItemStatus.ACTIVE,
+        "status": "active",
     }
     
     if category:
@@ -196,7 +196,7 @@ async def search_nearby(
                 "$maxDistance": radius,
             }
         },
-        "status": ItemStatus.ACTIVE,
+        "status": "active",
     }
     
     if category:
@@ -270,7 +270,7 @@ async def get_item_matches(
     
     # Build search query based on item attributes
     query = {
-        "status": ItemStatus.ACTIVE,
+        "status": "active",
         "$or": [
             {"category": source_item["category"]},
         ],
