@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { foundItemsService, searchService } from '../services/api';
+import { foundItemsService, searchService, getImageUrl } from '../services/api';
 import {
   PackagePlus,
   Plus,
@@ -173,7 +173,7 @@ export default function FoundItems() {
               <div className="aspect-video bg-gray-100 rounded-lg mb-4 overflow-hidden relative">
                 {item.images && item.images.length > 0 ? (
                   <img
-                    src={`http://localhost:8000${item.images[0]}`}
+                    src={getImageUrl(item.images[0])}
                     alt={item.title}
                     className="w-full h-full object-cover"
                     onError={(e) => {

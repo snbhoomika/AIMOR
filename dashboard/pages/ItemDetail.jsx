@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { lostItemsService, foundItemsService, claimsService, searchService } from '../services/api';
+import { lostItemsService, foundItemsService, claimsService, searchService, getImageUrl } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import {
   ArrowLeft,
@@ -182,7 +182,7 @@ export default function ItemDetail() {
           <div className="aspect-video bg-gray-100 rounded-xl overflow-hidden">
             {item.images && item.images.length > 0 ? (
               <img
-                src={`http://localhost:8000${item.images[0]}`}
+                src={getImageUrl(item.images[0])}
                 alt={item.title}
                 className="w-full h-full object-contain"
               />
@@ -198,7 +198,7 @@ export default function ItemDetail() {
               {item.images.map((img, idx) => (
                 <img
                   key={idx}
-                  src={`http://localhost:8000${img}`}
+                  src={getImageUrl(img)}
                   alt={`${item.title} ${idx + 1}`}
                   className="aspect-square object-cover rounded-lg cursor-pointer"
                 />

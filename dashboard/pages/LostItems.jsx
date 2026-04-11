@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { lostItemsService } from '../services/api';
+import { lostItemsService, getImageUrl } from '../services/api';
 import { searchService } from '../services/api';
 import {
   PackageSearch,
@@ -163,7 +163,7 @@ export default function LostItems() {
               <div className="aspect-video bg-gray-100 rounded-lg mb-4 overflow-hidden">
                 {item.images && item.images.length > 0 ? (
                   <img
-                    src={`http://localhost:8000${item.images[0]}`}
+                    src={getImageUrl(item.images[0])}
                     alt={item.title}
                     className="w-full h-full object-cover"
                     onError={(e) => {

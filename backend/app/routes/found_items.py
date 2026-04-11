@@ -14,7 +14,7 @@ from app.models.item import (
 )
 from app.models.notification import NotificationCreate, NotificationType
 from app.utils.security import get_current_user, str_to_object_id
-from app.utils.file_handler import save_multiple_files, delete_file
+from app.utils.file_handler import save_multiple_files, save_multiple_images_as_base64, delete_file
 from app.core.database import get_database
 
 router = APIRouter(prefix="/found-items", tags=["Found Items"])
@@ -50,10 +50,10 @@ async def create_found_item(
             detail="Invalid date format. Use ISO format (YYYY-MM-DDTHH:MM:SS)",
         )
 
-    # Upload images
+    # Upload images as base64
     image_urls = []
     if images:
-        image_urls = await save_multiple_files(images, subfolder="found-items")
+        image_urls = await save_multiple_images_as_base64(images)
 
     # Create item document
     item_data = {

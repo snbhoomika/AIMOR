@@ -1,5 +1,6 @@
 import os
 import uuid
+import base64
 from typing import List, Optional
 from pathlib import Path
 import aiofiles
@@ -10,20 +11,17 @@ import io
 from app.core.config import settings
 
 
-# Ensure upload directory exists
 UPLOAD_DIR = Path(settings.UPLOAD_DIR)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 async def validate_image_file(file: UploadFile) -> bool:
     """Validate that uploaded file is an allowed image type"""
-    # Check file extension
     if file.filename:
         ext = file.filename.split(".")[-1].lower()
         if ext not in settings.ALLOWED_EXTENSIONS:
             return False
 
-    # Check content type
     allowed_content_types = [
         "image/jpeg",
         "image/png",
@@ -36,6 +34,67 @@ async def validate_image_file(file: UploadFile) -> bool:
     return True
 
 
+async def process_image_to_base64(file: UploadFile) -> str:
+    """
+    Process an uploaded image and return base64 string for storage in database.
+    """
+    if not await validate_image_file(file):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid file type. Allowed: {', '.join(settings.ALLOWED_EXTENSIONS)}",
+        )
+
+    content = await file.read()
+
+    if len(content) > settings.MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size: {settings.MAX_UPLOAD_SIZE / 1024 / 1024}MB",
+        )
+
+    try:
+        image = Image.open(io.BytesIO(content))
+
+        if image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
+
+        image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=85)
+        processed_content = buffer.getvalue()
+
+        base64_string = base64.b64encode(processed_content).decode("utf-8")
+        content_type = "image/jpeg"
+
+        return f"data:{content_type};base64,{base64_string}"
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to process image: {str(e)}",
+        )
+
+
+async def save_multiple_images_as_base64(
+    files: List[UploadFile],
+    max_files: int = 5,
+) -> List[str]:
+    """Process multiple files and return list of base64 data URLs"""
+    if len(files) > max_files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Maximum {max_files} files allowed",
+        )
+
+    urls = []
+    for file in files:
+        if file.filename:
+            url = await process_image_to_base64(file)
+            urls.append(url)
+
+    return urls
+
+
 async def save_upload_file(
     file: UploadFile,
     subfolder: str = "items",
@@ -44,68 +103,47 @@ async def save_upload_file(
 ) -> str:
     """
     Save an uploaded file and return the URL path
-
-    Args:
-        file: The uploaded file
-        subfolder: Subfolder to save in (e.g., 'items', 'avatars')
-        resize: Whether to resize the image
-        max_size: Maximum dimensions for resizing
-
-    Returns:
-        URL path to the saved file
     """
-    # Validate file
     if not await validate_image_file(file):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid file type. Allowed: {', '.join(settings.ALLOWED_EXTENSIONS)}",
         )
 
-    # Generate unique filename
     ext = file.filename.split(".")[-1].lower() if file.filename else "jpg"
     filename = f"{uuid.uuid4()}.{ext}"
 
-    # Create full path
     folder_path = UPLOAD_DIR / subfolder
     folder_path.mkdir(parents=True, exist_ok=True)
     file_path = folder_path / filename
 
-    # Read file content
     content = await file.read()
 
-    # Check file size
     if len(content) > settings.MAX_UPLOAD_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File too large. Maximum size: {settings.MAX_UPLOAD_SIZE / 1024 / 1024}MB",
         )
 
-    # Process image if needed
     if resize and file.content_type.startswith("image/"):
         try:
             image = Image.open(io.BytesIO(content))
 
-            # Convert to RGB if necessary
             if image.mode in ("RGBA", "P"):
                 image = image.convert("RGB")
 
-            # Resize while maintaining aspect ratio
             image.thumbnail(max_size, Image.Resampling.LANCZOS)
 
-            # Save processed image
             buffer = io.BytesIO()
             image.save(buffer, format="JPEG", quality=85)
             content = buffer.getvalue()
             file_path = file_path.with_suffix(".jpg")
-        except Exception as e:
-            # If image processing fails, save original
+        except Exception:
             pass
 
-    # Save file
     async with aiofiles.open(file_path, "wb") as f:
         await f.write(content)
 
-    # Return URL path
     return f"/uploads/{subfolder}/{filename}"
 
 
@@ -123,7 +161,7 @@ async def save_multiple_files(
 
     urls = []
     for file in files:
-        if file.filename:  # Skip empty files
+        if file.filename:
             url = await save_upload_file(file, subfolder)
             urls.append(url)
 
@@ -133,9 +171,8 @@ async def save_multiple_files(
 def delete_file(file_path: str) -> bool:
     """Delete a file from the upload directory"""
     try:
-        # Convert URL path to file system path
         if file_path.startswith("/uploads/"):
-            relative_path = file_path[1:]  # Remove leading /
+            relative_path = file_path[1:]
             full_path = Path(relative_path)
 
             if full_path.exists():
