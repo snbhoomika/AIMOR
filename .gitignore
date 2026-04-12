@@ -1,7 +1,14 @@
 # Environment
 myenv/
 venv/
-.env
+.env*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
 
 # Dependencies
 node_modules/
@@ -13,6 +20,7 @@ build/
 # IDE
 .idea/
 *.iml
+.vscode/
 
 # OS
 .DS_Store
@@ -20,3 +28,14 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Uploads
+uploads/
+backend/uploads/
+
+# Frontend
+frontend/.env
+frontend/dist/
+
+# Python/Mongo
+*.db

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from bson import ObjectId
 import numpy as np
 
@@ -17,6 +17,10 @@ from app.core.database import get_database
 from app.core.config import settings
 
 router = APIRouter(prefix="/search", tags=["Search & Matching"])
+
+# Time-based similarity settings
+MAX_TIME_DIFF_DAYS = 30  # Items within this range get positive time score
+TIME_WEIGHT = 0.1  # 10% weight for time similarity
 
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -37,6 +41,33 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     return float(dot_product / (norm1 * norm2))
 
 
+def time_similarity(date1: datetime, date2: datetime) -> float:
+    """
+    Calculate time-based similarity between two dates.
+    Returns 1.0 if same day, decreasing to 0.0 for items far apart.
+    MAX_TIME_DIFF_DAYS: beyond this, score is 0
+    """
+    if not date1 or not date2:
+        return 0.0
+    
+    time_diff = abs((date1 - date2).total_seconds())
+    days_diff = time_diff / (24 * 3600)
+    
+    if days_diff >= MAX_TIME_DIFF_DAYS:
+        return 0.0
+    
+    # Linear decay: 1.0 at 0 days, 0.0 at MAX_TIME_DIFF_DAYS
+    return 1.0 - (days_diff / MAX_TIME_DIFF_DAYS)
+
+
+def calculate_combined_score(img_score: float, time_score: float) -> float:
+    """
+    Combine image similarity and time similarity scores.
+    Image similarity is weighted at 90%, time similarity at 10%.
+    """
+    return (1.0 - TIME_WEIGHT) * img_score + TIME_WEIGHT * time_score
+
+
 @router.post("/image")
 async def search_by_image(
     image: UploadFile = File(...),
@@ -47,7 +78,7 @@ async def search_by_image(
 ):
     """
     Search for matching items by uploading an image using ML-based similarity matching.
-    Uses CLIP ViT-B/32 to extract image features and matches against stored embeddings.
+    Uses CLIP ViT-B/32 for image features and time-based scoring for recency.
     """
     db = get_database()
     
@@ -57,6 +88,9 @@ async def search_by_image(
     # Extract features from the search image using CLIP
     extractor = get_feature_extractor()
     search_features = extractor.extract_image_features(image_content)
+    
+    # Current time for time-based similarity
+    current_time = datetime.utcnow()
     
     # Build query
     query = {"status": "active", "image_embedding": {"$exists": True, "$ne": []}}
@@ -79,14 +113,23 @@ async def search_by_image(
         for item in items:
             item_embedding = item.get("image_embedding", [])
             if item_embedding:
-                # Calculate actual similarity score using ML embeddings
-                similarity_score = cosine_similarity(search_features, item_embedding)
+                # Calculate image similarity using CLIP embeddings
+                img_score = cosine_similarity(search_features, item_embedding)
                 
-                # Only include items with reasonable similarity (threshold 0.3)
-                if similarity_score > 0.3:
+                # Calculate time-based similarity (items reported around same time)
+                item_date = item.get("created_at", datetime.utcnow())
+                time_score = time_similarity(current_time, item_date)
+                
+                # Combine scores: 90% image, 10% time
+                combined_score = calculate_combined_score(img_score, time_score)
+                
+                # Only include items with reasonable combined similarity (threshold 0.3)
+                if combined_score > 0.3:
                     results.append({
                         "item": item,
-                        "similarity_score": similarity_score,
+                        "similarity_score": round(combined_score, 4),
+                        "img_score": round(img_score, 4),
+                        "time_score": round(time_score, 4),
                         "match_type": "image",
                         "collection": collection_name,
                     })
@@ -275,6 +318,7 @@ async def get_item_matches(
     
     # Get source embedding
     source_embedding = source_item.get("image_embedding", [])
+    source_date = source_item.get("created_at", datetime.utcnow())
     
     # If no embedding exists, fall back to text-based matching
     if not source_embedding:
@@ -290,24 +334,32 @@ async def get_item_matches(
     cursor = db[search_collection].find(query)
     potential_matches = await cursor.to_list(length=100)
     
-    # Calculate similarity scores using ML embeddings
+    # Calculate similarity scores using ML embeddings + time-based scoring
     matches = []
     extractor = get_feature_extractor()
     
     for match in potential_matches:
         match_embedding = match.get("image_embedding", [])
         if match_embedding:
-            score = cosine_similarity(source_embedding, match_embedding)
+            # Image similarity
+            img_score = cosine_similarity(source_embedding, match_embedding)
+            
+            # Time-based similarity
+            match_date = match.get("created_at", datetime.utcnow())
+            time_score = time_similarity(source_date, match_date)
+            
+            # Combined score
+            combined_score = calculate_combined_score(img_score, time_score)
             
             # Only include matches above threshold
-            if score > 0.3:
+            if combined_score > 0.3:
                 matches.append({
                     "id": str(match["_id"]),
                     "title": match["title"],
                     "description": match["description"],
                     "category": match["category"],
                     "images": match.get("images", []),
-                    "similarity_score": score,
+                    "similarity_score": round(combined_score, 4),
                     "match_type": "auto",
                 })
     
