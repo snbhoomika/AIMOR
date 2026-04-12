@@ -17,10 +17,14 @@ bcrypt==4.0.1
 Pillow==10.2.0
 python-magic==0.4.27
 
-# ML Integration (for future)
+# ML Integration (CLIP + Sentence Transformers)
 numpy==1.26.3
-# torch==2.1.2  # Uncomment when ML integration is ready
-# torchvision==0.16.2  # Uncomment when ML integration is ready
+torch>=2.0.0
+torchvision>=0.15.0
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.0
+ftfy>=6.1.0
+git+https://github.com/openai/CLIP.git
 
 # Utilities
 pydantic[email]==2.5.3

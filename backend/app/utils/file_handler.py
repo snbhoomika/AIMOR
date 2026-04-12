@@ -34,9 +34,10 @@ async def validate_image_file(file: UploadFile) -> bool:
     return True
 
 
-async def process_image_to_base64(file: UploadFile) -> str:
+async def process_image_to_base64(file: UploadFile) -> tuple:
     """
-    Process an uploaded image and return base64 string for storage in database.
+    Process an uploaded image and return base64 string and feature vector for storage in database.
+    Returns: (base64_string, feature_vector)
     """
     if not await validate_image_file(file):
         raise HTTPException(
@@ -66,8 +67,14 @@ async def process_image_to_base64(file: UploadFile) -> str:
 
         base64_string = base64.b64encode(processed_content).decode("utf-8")
         content_type = "image/jpeg"
-
-        return f"data:{content_type};base64,{base64_string}"
+        base64_data = f"data:{content_type};base64,{base64_string}"
+        
+        # Extract features using CLIP model
+        from app.utils.image_features import get_feature_extractor
+        extractor = get_feature_extractor()
+        features = extractor.extract_image_features(processed_content)
+        
+        return base64_data, features
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -78,8 +85,11 @@ async def process_image_to_base64(file: UploadFile) -> str:
 async def save_multiple_images_as_base64(
     files: List[UploadFile],
     max_files: int = 5,
-) -> List[str]:
-    """Process multiple files and return list of base64 data URLs"""
+) -> tuple:
+    """
+    Process multiple files and return list of base64 data URLs and combined feature vector.
+    Returns: (urls, features)
+    """
     if len(files) > max_files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -87,12 +97,23 @@ async def save_multiple_images_as_base64(
         )
 
     urls = []
+    all_features = []
     for file in files:
         if file.filename:
-            url = await process_image_to_base64(file)
+            url, features = await process_image_to_base64(file)
             urls.append(url)
+            all_features.append(features)
+    
+    # Combine features from all images (average)
+    combined_features = []
+    if all_features:
+        feature_dim = len(all_features[0])
+        combined_features = [
+            sum(f[i] for f in all_features) / len(all_features)
+            for i in range(feature_dim)
+        ]
 
-    return urls
+    return urls, combined_features
 
 
 async def save_upload_file(

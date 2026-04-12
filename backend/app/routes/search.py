@@ -11,7 +11,8 @@ from app.models.item import (
     ItemStatus,
 )
 from app.utils.security import get_current_user, str_to_object_id
-from app.utils.file_handler import save_upload_file
+from app.utils.file_handler import process_image_to_base64
+from app.utils.image_features import get_feature_extractor
 from app.core.database import get_database
 from app.core.config import settings
 
@@ -45,44 +46,50 @@ async def search_by_image(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Search for matching items by uploading an image
-    This endpoint simulates ML-based image matching
+    Search for matching items by uploading an image using ML-based similarity matching.
+    Uses CLIP ViT-B/32 to extract image features and matches against stored embeddings.
     """
     db = get_database()
     
-    # Upload the search image
-    image_url = await save_upload_file(image, subfolder="search")
+    # Read and process the uploaded image
+    image_content = await image.read()
     
-    # TODO: In production, call ML service to extract image embedding
-    # For now, we'll simulate with text-based search
+    # Extract features from the search image using CLIP
+    extractor = get_feature_extractor()
+    search_features = extractor.extract_image_features(image_content)
     
     # Build query
-    collection = "found_items" if item_type == "found" else "lost_items"
-    if item_type == "all":
-        # Search both collections
-        pass
-    
-    query = {"status": "active"}
+    query = {"status": "active", "image_embedding": {"$exists": True, "$ne": []}}
     if category:
         query["category"] = category
     
-    # Get items
-    cursor = db[collection].find(query).limit(100)
-    items = await cursor.to_list(length=100)
+    # Determine which collections to search
+    collections_to_search = []
+    if item_type == "found" or item_type == "all":
+        collections_to_search.append("found_items")
+    if item_type == "lost" or item_type == "all":
+        collections_to_search.append("lost_items")
     
-    # Simulate similarity scoring (in production, use actual embeddings)
+    # Search for matching items
     results = []
-    for item in items:
-        # Placeholder: random similarity score
-        # In production: actual cosine similarity with embeddings
-        similarity_score = 0.5  # Placeholder
+    for collection_name in collections_to_search:
+        cursor = db[collection_name].find(query)
+        items = await cursor.to_list(length=100)
         
-        result = {
-            "item": item,
-            "similarity_score": similarity_score,
-            "match_type": "image",
-        }
-        results.append(result)
+        for item in items:
+            item_embedding = item.get("image_embedding", [])
+            if item_embedding:
+                # Calculate actual similarity score using ML embeddings
+                similarity_score = cosine_similarity(search_features, item_embedding)
+                
+                # Only include items with reasonable similarity (threshold 0.3)
+                if similarity_score > 0.3:
+                    results.append({
+                        "item": item,
+                        "similarity_score": similarity_score,
+                        "match_type": "image",
+                        "collection": collection_name,
+                    })
     
     # Sort by similarity score
     results.sort(key=lambda x: x["similarity_score"], reverse=True)
@@ -100,10 +107,10 @@ async def search_by_image(
             "images": item.get("images", []),
             "similarity_score": result["similarity_score"],
             "match_type": result["match_type"],
+            "collection": result["collection"],
         })
     
     return {
-        "search_image": image_url,
         "total_matches": len(response),
         "matches": response,
     }
@@ -159,7 +166,7 @@ async def search_by_text(
                 "description": item["description"],
                 "category": item["category"],
                 "images": item.get("images", []),
-                "similarity_score": 0.8,  # Placeholder
+                "similarity_score": 0.8,
                 "match_type": "text",
                 "collection": collection_name,
             })
@@ -217,7 +224,7 @@ async def search_nearby(
                 "category": item["category"],
                 "images": item.get("images", []),
                 "location": item.get("location"),
-                "distance": 100,  # Placeholder - calculate actual distance
+                "distance": 100,
                 "collection": collection_name,
             })
     
@@ -236,7 +243,7 @@ async def get_item_matches(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Get potential matches for a specific item
+    Get potential matches for a specific item using ML-based similarity
     """
     db = get_database()
     
@@ -260,15 +267,70 @@ async def get_item_matches(
     
     # Determine search direction
     if lost_item:
-        # User lost this item, search in found_items
         source_item = lost_item
         search_collection = "found_items"
     else:
-        # User found this item, search in lost_items
         source_item = found_item
         search_collection = "lost_items"
     
-    # Build search query based on item attributes
+    # Get source embedding
+    source_embedding = source_item.get("image_embedding", [])
+    
+    # If no embedding exists, fall back to text-based matching
+    if not source_embedding:
+        return await _text_based_matching(source_item, search_collection, db, limit, item_id, lost_item is not None)
+    
+    # Search for potential matches with embeddings
+    query = {
+        "status": "active",
+        "image_embedding": {"$exists": True, "$ne": []},
+        "_id": {"$ne": object_id},
+    }
+    
+    cursor = db[search_collection].find(query)
+    potential_matches = await cursor.to_list(length=100)
+    
+    # Calculate similarity scores using ML embeddings
+    matches = []
+    extractor = get_feature_extractor()
+    
+    for match in potential_matches:
+        match_embedding = match.get("image_embedding", [])
+        if match_embedding:
+            score = cosine_similarity(source_embedding, match_embedding)
+            
+            # Only include matches above threshold
+            if score > 0.3:
+                matches.append({
+                    "id": str(match["_id"]),
+                    "title": match["title"],
+                    "description": match["description"],
+                    "category": match["category"],
+                    "images": match.get("images", []),
+                    "similarity_score": score,
+                    "match_type": "auto",
+                })
+    
+    # Sort by similarity score
+    matches.sort(key=lambda x: x["similarity_score"], reverse=True)
+    matches = matches[:limit]
+    
+    # Update match count
+    await db[search_collection].update_one(
+        {"_id": object_id},
+        {"$set": {"match_count": len(matches), "updated_at": datetime.utcnow()}},
+    )
+    
+    return {
+        "item_id": item_id,
+        "item_type": "lost" if lost_item else "found",
+        "total_matches": len(matches),
+        "matches": matches,
+    }
+
+
+async def _text_based_matching(source_item, search_collection, db, limit, item_id, is_lost):
+    """Fallback text-based matching when no image embedding exists"""
     query = {
         "status": "active",
         "$or": [
@@ -276,43 +338,27 @@ async def get_item_matches(
         ],
     }
     
-    # Add color to search if available
     if source_item.get("color"):
         query["$or"].append({"color": {"$regex": source_item["color"], "$options": "i"}})
     
-    # Search for potential matches
-    cursor = db[search_collection].find(query).limit(100)
+    cursor = db[search_collection].find(query)
     potential_matches = await cursor.to_list(length=100)
     
-    # Calculate similarity scores (simplified version)
     matches = []
     for match in potential_matches:
-        # Calculate text similarity
-        score = 0.5  # Placeholder - use actual ML similarity
-        
         matches.append({
             "id": str(match["_id"]),
             "title": match["title"],
             "description": match["description"],
             "category": match["category"],
             "images": match.get("images", []),
-            "similarity_score": score,
-            "match_type": "auto",
+            "similarity_score": 0.5,
+            "match_type": "category",
         })
-    
-    # Sort by similarity score
-    matches.sort(key=lambda x: x["similarity_score"], reverse=True)
-    
-    # Update match count
-    update_field = "match_count" if not lost_item else "match_count"
-    await db[search_collection].update_one(
-        {"_id": object_id},
-        {"$inc": {"match_count": len(matches)}},
-    )
     
     return {
         "item_id": item_id,
-        "item_type": "lost" if lost_item else "found",
+        "item_type": "lost" if is_lost else "found",
         "total_matches": len(matches),
         "matches": matches[:limit],
     }

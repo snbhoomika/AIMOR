@@ -50,10 +50,11 @@ async def create_found_item(
             detail="Invalid date format. Use ISO format (YYYY-MM-DDTHH:MM:SS)",
         )
 
-    # Upload images as base64
+    # Upload images as base64 with ML features
     image_urls = []
+    image_features = []
     if images:
-        image_urls = await save_multiple_images_as_base64(images)
+        image_urls, image_features = await save_multiple_images_as_base64(images)
 
     # Create item document
     item_data = {
@@ -65,6 +66,7 @@ async def create_found_item(
         "brand": brand,
         "distinguishing_features": distinguishing_features,
         "images": image_urls,
+        "image_embedding": image_features,
         "user_id": str(current_user["_id"]),
         "current_location": current_location,
         "status": ItemStatus.ACTIVE,
