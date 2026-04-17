@@ -59,7 +59,7 @@ def similarity(vec1, vec2):
 
 
 def final_score(img_sim, text_sim):
-    return 0.6 * img_sim + 0.4 * text_sim
+    return 0.7 * img_sim + 0.3 * text_sim
 
 
 # =========================
@@ -174,11 +174,12 @@ def show_results(results):
 # MAIN (TESTING)
 if __name__ == "__main__":
 
-    query_image = os.path.join(IMAGE_DIR, "headphones/000006.jpg")
+    # query_image = os.path.join(IMAGE_DIR, "headphones/000006.jpg")
+    query_image = r"D:\Lost_and_Found\ml\test_images\headphones1.jpg"
 
     results = find_matches(
         query_image,
-        "black headphones",
+        "headphones",
         category="headphones"
     )
 
